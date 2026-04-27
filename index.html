@@ -116,7 +116,6 @@ const AMBIENTES_PADRAO = [
   ["Quintal / área de serviço",""],
 ];
 
-// Cada ambiente: {nome, obs, fotos:[base64,...]}
 let ambs = [];
 
 function aba(id, btn){
@@ -159,16 +158,28 @@ function rmAmb(i){ ambs[i]=null; document.getElementById('a'+i)?.remove(); }
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
-// Lê arquivos e converte DIRETO para base64 — sem URL.createObjectURL
 function lerFotos(input, i){
-  Array.from(input.files).forEach(f=>{
+  const files = Array.from(input.files);
+  if(!files.length) return;
+
+  let total = files.length;
+  let feitos = 0;
+
+  files.forEach(f=>{
     const r = new FileReader();
     r.onload = e => {
-      ambs[i].fotos.push(e.target.result); // já é data:image/...;base64,...
-      renderThumbs(i);
+      ambs[i].fotos.push(e.target.result);
+      feitos++;
+      if(feitos === total) renderThumbs(i);
+    };
+    r.onerror = e => {
+      console.error('Erro ao ler arquivo:', f.name, e);
+      feitos++;
+      if(feitos === total) renderThumbs(i);
     };
     r.readAsDataURL(f);
   });
+
   input.value='';
 }
 
@@ -178,7 +189,6 @@ function renderThumbs(i){
   ambs[i].fotos.forEach((src,fi)=>{
     const d = document.createElement('div');
     d.className='thumb';
-    // img com src base64 — sem dependência de arquivo local
     d.innerHTML=`<img src="${src}"><button class="thumb-rm" onclick="rmFoto(${i},${fi})">×</button>`;
     c.appendChild(d);
   });
@@ -188,35 +198,30 @@ function renderThumbs(i){
 
 function rmFoto(i,fi){ ambs[i].fotos.splice(fi,1); renderThumbs(i); }
 
-// Inicializa
 AMBIENTES_PADRAO.forEach(([n,o])=>novoAmb(n,o));
 document.getElementById('dataVistoria').valueAsDate = new Date();
 
-// ── PDF ─────────────────────────────────────────────────────────────────────
+// Extrai base64 puro da string data URL — sem canvas, sem Image(), sem async
+function extrairBase64(dataUrl){
+  if(!dataUrl) return null;
+  const partes = dataUrl.split(',');
+  if(partes.length < 2) return null;
+  return partes[1];
+}
+
+function detectarFormato(dataUrl){
+  if(dataUrl.includes('image/png'))  return 'PNG';
+  if(dataUrl.includes('image/webp')) return 'WEBP';
+  return 'JPEG';
+}
+
+// ── PDF ──────────────────────────────────────────────────────────────────────
 function vl(id){ return document.getElementById(id).value.trim(); }
 
 function fmtData(raw){
   if(!raw) return new Date().toLocaleDateString('pt-BR',{day:'numeric',month:'long',year:'numeric'});
   const [y,m,d]=raw.split('-');
   return new Date(+y,+m-1,+d).toLocaleDateString('pt-BR',{day:'numeric',month:'long',year:'numeric'});
-}
-
-// Redimensiona base64 via canvas e retorna novo base64 — tudo em memória, sem CORS
-function resizeBase64(b64, maxW=1200, maxH=900){
-  return new Promise(resolve=>{
-    const img = new Image();
-    img.onload = ()=>{
-      let w=img.width, h=img.height;
-      const ratio = Math.min(maxW/w, maxH/h, 1);
-      w=Math.round(w*ratio); h=Math.round(h*ratio);
-      const cv = document.createElement('canvas');
-      cv.width=w; cv.height=h;
-      cv.getContext('2d').drawImage(img,0,0,w,h);
-      resolve({b64: cv.toDataURL('image/jpeg',0.82), w, h});
-    };
-    img.onerror = ()=>resolve(null);
-    img.src = b64; // base64 direto — sem file:// — sem bloqueio de CORS
-  });
 }
 
 async function gerarPDF(){
@@ -235,20 +240,8 @@ async function gerarPDF(){
       doc.setFontSize(size); doc.setFont('helvetica',style); doc.setTextColor(...color);
       const lines = doc.splitTextToSize(txt, maxW);
       lines.forEach(l=>{ checkY(size*0.45); doc.text(l,x,y); y+=size*0.45; });
-      return y;
     }
 
-    // Cabeçalho
-    doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(120,120,120);
-    doc.text('Nova Imobiliária — Rua Saldanha Marinho, 574 - Centro - VGSul/SP — (19) 3643-1641 | (19) 99224-3434 | novaimobiliariavgs@gmail.com', PW/2, y, {align:'center'});
-    y+=4;
-    doc.setDrawColor(180,180,180); doc.setLineWidth(0.3); doc.line(ML,y,PW-MR,y); y+=6;
-
-    // Título
-    doc.setFontSize(13); doc.setFont('helvetica','bold'); doc.setTextColor(0,0,0);
-    doc.text('TERMO DE VISTORIA E ENTREGA DE CHAVES', PW/2, y, {align:'center'}); y+=9;
-
-    // Campos das partes — bold + normal na mesma linha
     function linhaCampo(bold, resto){
       checkY(8);
       doc.setFontSize(11);
@@ -262,14 +255,24 @@ async function gerarPDF(){
       y+=1;
     }
 
-    const locador    = vl('locador')     || '___________________';
-    const locadorCpf = vl('locadorCpf')  || '___________';
-    const locatario  = vl('locatario')   || '___________________';
-    const latCpf     = vl('locatarioCpf')|| '___________';
-    const endereco   = vl('endereco')    || '___________________';
-    const tipo       = vl('tipo')        || 'imóvel';
+    // Cabeçalho
+    doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(120,120,120);
+    doc.text('Nova Imobiliária — Rua Saldanha Marinho, 574 - Centro - VGSul/SP — (19) 3643-1641 | (19) 99224-3434 | novaimobiliariavgs@gmail.com', PW/2, y, {align:'center'});
+    y+=4;
+    doc.setDrawColor(180,180,180); doc.setLineWidth(0.3); doc.line(ML,y,PW-MR,y); y+=6;
+
+    // Título
+    doc.setFontSize(13); doc.setFont('helvetica','bold'); doc.setTextColor(0,0,0);
+    doc.text('TERMO DE VISTORIA E ENTREGA DE CHAVES', PW/2, y, {align:'center'}); y+=9;
+
+    const locador    = vl('locador')      || '___________________';
+    const locadorCpf = vl('locadorCpf')   || '___________';
+    const locatario  = vl('locatario')    || '___________________';
+    const latCpf     = vl('locatarioCpf') || '___________';
+    const endereco   = vl('endereco')     || '___________________';
+    const tipo       = vl('tipo')         || 'imóvel';
     const comp       = vl('composicao');
-    const chaves     = vl('chaves')      || '__';
+    const chaves     = vl('chaves')       || '__';
     const obsG       = vl('obsGerais');
     const dataVist   = fmtData(vl('dataVistoria'));
 
@@ -293,22 +296,26 @@ async function gerarPDF(){
       doc.text(`${num} – ${amb.nome.toUpperCase()}`, ML, y); y+=6;
       if(amb.obs){ paragrafo(amb.obs, ML, CW, 10, 'normal'); y+=2; }
 
-      // Fotos — base64 já prontas, só redimensionar via canvas
-      if(amb.fotos.length>0){
-        const FW=(CW-6)/2;
-        const FH=FW*0.65;
-        for(let fi=0; fi<amb.fotos.length; fi+=2){
-          checkY(FH+5);
-          for(let fj=0; fj<2; fj++){
-            if(fi+fj>=amb.fotos.length) break;
-            const res = await resizeBase64(amb.fotos[fi+fj]);
-            if(!res) continue;
-            const fx = ML+fj*(FW+6);
-            doc.setDrawColor(200,200,200); doc.setLineWidth(0.3);
+      if(amb.fotos.length > 0){
+        const COLS = amb.fotos.length === 1 ? 1 : amb.fotos.length % 3 === 0 ? 3 : 2;
+        const GAP = 4;
+        const FW = (CW - GAP*(COLS-1)) / COLS;
+        const FH = FW * 0.68;
+
+        for(let fi=0; fi<amb.fotos.length; fi+=COLS){
+          checkY(FH+GAP);
+          for(let fj=0; fj<COLS; fj++){
+            if(fi+fj >= amb.fotos.length) break;
+            const dataUrl = amb.fotos[fi+fj];
+            const b64puro = extrairBase64(dataUrl);
+            const fmt     = detectarFormato(dataUrl);
+            if(!b64puro) continue;
+            const fx = ML + fj*(FW+GAP);
+            doc.setDrawColor(210,210,210); doc.setLineWidth(0.2);
             doc.rect(fx, y, FW, FH);
-            doc.addImage(res.b64, 'JPEG', fx, y, FW, FH);
+            doc.addImage(b64puro, fmt, fx, y, FW, FH, undefined, 'FAST');
           }
-          y+=FH+5;
+          y += FH+GAP;
         }
       }
       y+=4;
@@ -328,7 +335,6 @@ async function gerarPDF(){
     const ldw=doc.getTextWidth('Local/Data: ');
     doc.setFont('helvetica','normal'); doc.text(`Vargem Grande do Sul, ${dataVist}.`,ML+ldw,y); y+=14;
 
-    // Assinaturas
     ['LOCADOR(A)','ADMINISTRADORA — Nova Imobiliária','LOCATÁRIO(A)'].forEach(l=>{
       checkY(20);
       doc.setDrawColor(0); doc.setLineWidth(0.5); doc.line(ML,y,ML+70,y); y+=4;
@@ -345,6 +351,7 @@ async function gerarPDF(){
     doc.text('RG: _________________________',ML,y); doc.text('RG: _________________________',ML+80,y);
 
     doc.save('Termo_Vistoria_Nova_Imobiliaria.pdf');
+
   } catch(e){
     alert('Erro ao gerar PDF:\n'+e.message);
     console.error(e);
