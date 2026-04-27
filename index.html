@@ -168,7 +168,9 @@ function lerFotos(input, i){
   files.forEach(f=>{
     const r = new FileReader();
     r.onload = e => {
-      ambs[i].fotos.push(e.target.result);
+      const resultado = e.target.result;
+      console.log('Foto lida:', f.name, 'tamanho:', resultado.length, 'inicio:', resultado.substring(0,30));
+      ambs[i].fotos.push(resultado);
       feitos++;
       if(feitos === total) renderThumbs(i);
     };
@@ -189,7 +191,16 @@ function renderThumbs(i){
   ambs[i].fotos.forEach((src,fi)=>{
     const d = document.createElement('div');
     d.className='thumb';
-    d.innerHTML=`<img src="${src}"><button class="thumb-rm" onclick="rmFoto(${i},${fi})">×</button>`;
+    // usa createElement para evitar problema de innerHTML com base64 grande
+    const img = document.createElement('img');
+    img.src = src;
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block';
+    const btn = document.createElement('button');
+    btn.className = 'thumb-rm';
+    btn.textContent = '×';
+    btn.onclick = ()=>rmFoto(i,fi);
+    d.appendChild(img);
+    d.appendChild(btn);
     c.appendChild(d);
   });
   const b = document.getElementById('b'+i);
